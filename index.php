@@ -17,6 +17,9 @@ function formatMinutesToHoursAndMinutes(int $totalMinutes): string
     }
 }
 
+date_default_timezone_set('America/Santiago');
+
+$fecha_actual_hora_actual = date('Y-m-d H:i');
 
 // Variables para almacenar mensajes
 $mensaje = '';
@@ -40,10 +43,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         // Preparar e insertar el registro en la base de datos
         try {
-            $sql = "INSERT INTO registros_bateria (porcentaje_actual, porcentaje_faltante, minutos_carga) 
-                    VALUES (:porcentaje_actual, :porcentaje_faltante, :minutos_carga)";
+            $sql = "INSERT INTO registros_bateria (fecha_registro, porcentaje_actual, porcentaje_faltante, minutos_carga) 
+                    VALUES (:fecha_registro, :porcentaje_actual, :porcentaje_faltante, :minutos_carga)";
             $stmt = $pdo->prepare($sql);
             $stmt->execute([
+                ':fecha_registro' => $fecha_actual_hora_actual,
                 ':porcentaje_actual' => $porcentaje_actual,
                 ':porcentaje_faltante' => $porcentaje_faltante,
                 ':minutos_carga' => $minutos_carga

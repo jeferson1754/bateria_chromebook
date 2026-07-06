@@ -1,6 +1,6 @@
 <?php
 $host = 'localhost';
-$db = 'bateria_chromebook';
+$db = 'epiz_32740026_r_user';
 $user = 'root'; // Cambia esto a tu usuario de MySQL
 $pass = ''; // Cambia esto a tu contraseña de MySQL
 $charset = 'utf8mb4';
