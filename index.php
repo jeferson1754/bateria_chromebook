@@ -431,9 +431,20 @@ try {
                                                 🎯 <?php echo $registro['porcentaje_final_real']; ?>% Real
                                             </span>
                                         <?php else: ?>
-                                            <span class="inline-flex items-center rounded-md bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-800 ring-1 ring-inset ring-amber-600/20 animate-pulse">
-                                                ⚡ Cargando...
-                                            </span>
+                                            <?php
+                                            // Comprobamos si este registro es el primero de la lista (el más nuevo)
+                                            // usando el ID de la carga en curso actual si existe
+                                            $es_el_ultimo_activo = ($carga_en_curso && $registro['id'] == $carga_en_curso['id']);
+
+                                            if ($es_el_ultimo_activo): ?>
+                                                <span class="inline-flex items-center rounded-md bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-800 ring-1 ring-inset ring-amber-600/20 animate-pulse">
+                                                    ⚡ Cargando...
+                                                </span>
+                                            <?php else: ?>
+                                                <span class="inline-flex items-center rounded-md bg-gray-100 px-2.5 py-1 text-xs font-medium text-gray-500 ring-1 ring-inset ring-gray-400/20">
+                                                    💤 Sin datos
+                                                </span>
+                                            <?php endif; ?>
                                         <?php endif; ?>
                                     </td>
                                 </tr>
