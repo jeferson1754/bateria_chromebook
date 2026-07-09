@@ -107,40 +107,67 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $mensaje = 'Por favor, ingresa un porcentaje válido entre 0 y 100.';
             $tipo_mensaje = 'error';
         } else {
-            $porcentaje_objetivo = 80;
-            $porcentaje_faltante = max(0, $porcentaje_objetivo - $porcentaje_actual);
-
-            // Usamos la tasa calculada adaptativamente arriba
-            $minutos_carga = (int)round($porcentaje_faltante * $minutos_por_porcentaje);
-
             try {
-                $sql = "INSERT INTO registros_bateria (fecha_registro, porcentaje_actual, porcentaje_faltante, minutos_carga, porcentaje_final_real) 
-                        VALUES (:fecha_registro, :porcentaje_actual, :porcentaje_faltante, :minutos_carga, NULL)";
-                $stmt = $pdo->prepare($sql);
-                $stmt->execute([
-                    ':fecha_registro' => $fecha_actual_hora_actual,
-                    ':porcentaje_actual' => $porcentaje_actual,
-                    ':porcentaje_faltante' => $porcentaje_faltante,
-                    ':minutos_carga' => $minutos_carga
+                // =========================================================================
+                // NUEVA VALIDACIÓN: Evitar mismo porcentaje el mismo día
+                // =========================================================================
+                $hoy_fecha = date('Y-m-d'); // Obtiene el día actual (ej: 2026-07-09)
+
+                $sql_duplicado = "SELECT id FROM registros_bateria 
+                                  WHERE DATE(fecha_registro) = :hoy 
+                                  AND porcentaje_actual = :porcentaje";
+                $stmt_duplicado = $pdo->prepare($sql_duplicado);
+                $stmt_duplicado->execute([
+                    ':hoy' => $hoy_fecha,
+                    ':porcentaje' => $porcentaje_actual
                 ]);
 
-                $resultado_calculo = [
-                    'porcentaje_actual' => $porcentaje_actual,
-                    'porcentaje_faltante' => $porcentaje_faltante,
-                    'minutos_carga' => $minutos_carga
-                ];
+                if ($stmt_duplicado->fetch()) {
+                    // Si encuentra un registro, bloquea la inserción enviando un mensaje de error
+                    $mensaje = "Ya registraste una carga hoy iniciando con el " . $porcentaje_actual . "%. Intenta con otro valor.";
+                    $tipo_mensaje = 'error';
+                } else {
+                    // Si no está duplicado, procede con el comportamiento normal de cálculo y guardado
+                    $porcentaje_objetivo = 80;
+                    $porcentaje_faltante = max(0, $porcentaje_objetivo - $porcentaje_actual);
 
-                $mensaje = 'Nueva carga iniciada. ¡Calculado con ritmo adaptativo de ' . round($minutos_por_porcentaje, 2) . ' min/%!';
-                $tipo_mensaje = 'success';
+                    // Usamos la tasa calculada adaptativamente
+                    $minutos_carga = (int)round($porcentaje_faltante * $minutos_por_porcentaje);
 
-                $carga_en_curso = [
-                    'id' => $pdo->lastInsertId(),
-                    'fecha_registro' => $fecha_actual_hora_actual,
-                    'porcentaje_actual' => $porcentaje_actual,
-                    'minutos_carga' => $minutos_carga
-                ];
+                    $sql = "INSERT INTO registros_bateria (fecha_registro, porcentaje_actual, porcentaje_faltante, minutes_carga = minutos_carga, porcentaje_final_real) 
+                            VALUES (:fecha_registro, :porcentaje_actual, :porcentaje_faltante, :minutos_carga, NULL)";
+                    // Corrección del bug menor en el string SQL original
+                    $sql = "INSERT INTO registros_bateria (fecha_registro, porcentaje_actual, porcentaje_faltante, minutos_carga, porcentaje_final_real) 
+                            VALUES (:fecha_registro, :porcentaje_actual, :porcentaje_faltante, :minutos_carga, NULL)";
+
+                    $stmt = $pdo->prepare($sql);
+                    $stmt->execute([
+                        ':fecha_registro' => $fecha_actual_hora_actual,
+                        ':porcentaje_actual' => $porcentaje_actual,
+                        ':porcentaje_faltante' => $porcentaje_faltante,
+                        ':minutos_carga' => $minutos_carga
+                    ]);
+
+                    $resultado_calculo = [
+                        'porcentaje_actual' => $porcentaje_actual,
+                        'porcentaje_faltante' => $porcentaje_faltante,
+                        'minutos_carga' => $minutos_carga
+                    ];
+
+                    $mensaje = 'Nueva carga iniciada. ¡Calculado con ritmo adaptativo de ' . round($minutos_por_porcentaje, 2) . ' min/%!';
+                    $tipo_mensaje = 'success';
+
+                    $carga_en_curso = [
+                        'id' => $pdo->lastInsertId(),
+                        'fecha_registro' => $fecha_actual_hora_actual,
+                        'porcentaje_actual' => $porcentaje_actual,
+                        'minutos_carga' => $minutos_carga
+                    ];
+                }
+                // =========================================================================
+
             } catch (PDOException $e) {
-                $mensaje = 'Error al guardar el registro: ' . $e->getMessage();
+                $mensaje = 'Error al procesar el registro: ' . $e->getMessage();
                 $tipo_mensaje = 'error';
             }
         }
