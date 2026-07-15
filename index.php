@@ -23,13 +23,13 @@ $mensaje = '';
 $tipo_mensaje = '';
 $resultado_calculo = null;
 
-// ==========================================
-// MEJORA 1: ALGORITMO ADAPTATIVO (HISTORIAL)
-// ==========================================
-$minutos_por_porcentaje = 1.5; // Valor por defecto
+// =========================================================================
+// MEJORA: CALCULAR EL FACTOR DE ADAPTACIÓN INTELIGENTE (HISTORIAL)
+// =========================================================================
+$factor_correccion = 1.0; // 1.0 significa que carga exactamente al ritmo base de fábrica
 
 try {
-    // Obtenemos las últimas 5 cargas completadas con éxito
+    // Obtenemos las últimas 5 cargas reales completadas con éxito
     $sql_historico = "SELECT porcentaje_actual, porcentaje_final_real, minutos_carga 
                       FROM registros_bateria 
                       WHERE porcentaje_final_real IS NOT NULL 
@@ -39,19 +39,47 @@ try {
     $cargas_pasadas = $stmt_hist->fetchAll();
 
     if (count($cargas_pasadas) > 0) {
-        $total_tasas = 0;
+        $suma_factores = 0;
+        $total_cargas_validas = 0;
+
         foreach ($cargas_pasadas as $cp) {
-            $porcentaje_ganado = $cp['porcentaje_final_real'] - $cp['porcentaje_actual'];
-            if ($porcentaje_ganado > 0) {
-                // Minutos reales invertidos por cada 1% en esta carga
-                $total_tasas += ($cp['minutos_carga'] / $porcentaje_ganado);
+            $p_inicial = $cp['porcentaje_actual'];
+            $p_final = $cp['porcentaje_final_real'];
+            $minutos_reales = $cp['minutos_carga'];
+
+            // Calcular cuánto debería haber tardado teóricamente según el modelo de tramos base (65% inflexión)
+            $minutos_teoricos = 0;
+            $p_temp = $p_inicial;
+            $punto_inflexion = 65;
+            $t_rapida_base = 1.1;
+            $t_lenta_base = 1.5;
+
+            if ($p_temp < $p_final) {
+                if ($p_temp < $punto_inflexion) {
+                    $puntos_t1 = min($punto_inflexion, $p_final) - $p_temp;
+                    $minutos_teoricos += $puntos_t1 * $t_rapida_base;
+                    $p_temp = $punto_inflexion;
+                }
+                if ($p_temp < $p_final) {
+                    $puntos_t2 = $p_final - $p_temp;
+                    $minutos_teoricos += $puntos_t2 * $t_lenta_base;
+                }
+            }
+
+            if ($minutos_teoricos > 0) {
+                // Relación real vs teórica (ej: si tomó 45 min y el teórico era 40 min, factor = 1.125 [un 12.5% más lento])
+                $suma_factores += ($minutos_reales / $minutos_teoricos);
+                $total_cargas_validas++;
             }
         }
-        // Promedio adaptativo real
-        $minutos_por_porcentaje = $total_tasas / count($cargas_pasadas);
+
+        if ($total_cargas_validas > 0) {
+            // Promedio del factor de rendimiento de tu Chromebook
+            $factor_correccion = $suma_factores / $total_cargas_validas;
+        }
     }
 } catch (PDOException $e) {
-    // Si falla, se queda con el 1.5 por defecto de forma segura
+    // Si falla la consulta, el factor se queda en 1.0 de forma segura (usa el estándar)
 }
 
 // 1. VERIFICAR SI HAY UNA CARGA EN CURSO (Último registro sin porcentaje final)
@@ -90,7 +118,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     ':id' => $carga_en_curso['id']
                 ]);
 
-                $mensaje = '¡Carga finalizada con éxito! Registro completado.';
+                $mensaje = '¡Carga finalizada con éxito! El algoritmo ha aprendido de este registro.';
                 $tipo_mensaje = 'success';
                 $carga_en_curso = null;
             } catch (PDOException $e) {
@@ -99,7 +127,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
         }
     }
-    // CASO B: Calcular e iniciar una nueva carga
+    // CASO B: Calcular e iniciar una nueva carga con ALGORITMO ADAPTATIVO SEGMENTADO
     else if (isset($_POST['accion']) && $_POST['accion'] === 'calcular_carga') {
         $porcentaje_actual = filter_input(INPUT_POST, 'porcentaje_actual', FILTER_VALIDATE_INT);
 
@@ -108,35 +136,44 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $tipo_mensaje = 'error';
         } else {
             try {
-                // =========================================================================
-                // NUEVA VALIDACIÓN: Evitar mismo porcentaje el mismo día
-                // =========================================================================
-                $hoy_fecha = date('Y-m-d'); // Obtiene el día actual (ej: 2026-07-09)
-
-                $sql_duplicado = "SELECT id FROM registros_bateria 
-                                  WHERE DATE(fecha_registro) = :hoy 
-                                  AND porcentaje_actual = :porcentaje";
+                // Evitar duplicados el mismo día
+                $hoy_fecha = date('Y-m-d');
+                $sql_duplicado = "SELECT id FROM registros_bateria WHERE DATE(fecha_registro) = :hoy AND porcentaje_actual = :porcentaje";
                 $stmt_duplicado = $pdo->prepare($sql_duplicado);
-                $stmt_duplicado->execute([
-                    ':hoy' => $hoy_fecha,
-                    ':porcentaje' => $porcentaje_actual
-                ]);
+                $stmt_duplicado->execute([':hoy' => $hoy_fecha, ':porcentaje' => $porcentaje_actual]);
 
                 if ($stmt_duplicado->fetch()) {
-                    // Si encuentra un registro, bloquea la inserción enviando un mensaje de error
                     $mensaje = "Ya registraste una carga hoy iniciando con el " . $porcentaje_actual . "%. Intenta con otro valor.";
                     $tipo_mensaje = 'error';
                 } else {
-                    // Si no está duplicado, procede con el comportamiento normal de cálculo y guardado
                     $porcentaje_objetivo = 80;
+                    $punto_inflexion = 65;
+
+                    // Aplicamos el factor de corrección inteligente calculado desde el historial a los tramos físicos
+                    $tasa_rapida = 1.1 * $factor_correccion;
+                    $tasa_lenta = 1.5 * $factor_correccion;
+
+                    $minutos_carga = 0;
+                    $porcentaje_temp = $porcentaje_actual;
+
+                    if ($porcentaje_temp < $porcentaje_objetivo) {
+                        // 1. Tramo rápido adaptado
+                        if ($porcentaje_temp < $punto_inflexion) {
+                            $puntos_tramo_1 = min($punto_inflexion, $porcentaje_objetivo) - $porcentaje_temp;
+                            $minutos_carga += $puntos_tramo_1 * $tasa_rapida;
+                            $porcentaje_temp = $punto_inflexion;
+                        }
+
+                        // 2. Tramo lento adaptado
+                        if ($porcentaje_temp < $porcentaje_objetivo) {
+                            $puntos_tramo_2 = $porcentaje_objetivo - $porcentaje_temp;
+                            $minutos_carga += $puntos_tramo_2 * $tasa_lenta;
+                        }
+                    }
+
+                    $minutos_carga = (int)round($minutos_carga);
                     $porcentaje_faltante = max(0, $porcentaje_objetivo - $porcentaje_actual);
 
-                    // Usamos la tasa calculada adaptativamente
-                    $minutos_carga = (int)round($porcentaje_faltante * $minutos_por_porcentaje);
-
-                    $sql = "INSERT INTO registros_bateria (fecha_registro, porcentaje_actual, porcentaje_faltante, minutes_carga = minutos_carga, porcentaje_final_real) 
-                            VALUES (:fecha_registro, :porcentaje_actual, :porcentaje_faltante, :minutos_carga, NULL)";
-                    // Corrección del bug menor en el string SQL original
                     $sql = "INSERT INTO registros_bateria (fecha_registro, porcentaje_actual, porcentaje_faltante, minutos_carga, porcentaje_final_real) 
                             VALUES (:fecha_registro, :porcentaje_actual, :porcentaje_faltante, :minutos_carga, NULL)";
 
@@ -154,7 +191,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         'minutos_carga' => $minutos_carga
                     ];
 
-                    $mensaje = 'Nueva carga iniciada. ¡Calculado con ritmo adaptativo de ' . round($minutos_por_porcentaje, 2) . ' min/%!';
+                    $porcentaje_desviacion = round(($factor_correccion - 1) * 100);
+                    $texto_desviacion = $porcentaje_desviacion >= 0 ? "+$porcentaje_desviacion%" : "$porcentaje_desviacion%";
+                    $mensaje = "Nueva carga calculada con curva física adaptada y calibración de historial del $texto_desviacion.";
                     $tipo_mensaje = 'success';
 
                     $carga_en_curso = [
@@ -164,8 +203,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         'minutos_carga' => $minutos_carga
                     ];
                 }
-                // =========================================================================
-
             } catch (PDOException $e) {
                 $mensaje = 'Error al procesar el registro: ' . $e->getMessage();
                 $tipo_mensaje = 'error';
@@ -362,7 +399,7 @@ try {
                 <div class="mb-6 flex items-center justify-between border-b border-gray-100 pb-4">
                     <h2 class="text-lg font-bold text-gray-800">🔌 Calculadora de Carga</h2>
                     <div class="inline-flex items-center gap-1.5 rounded-full bg-indigo-50 px-3 py-1 text-xs font-semibold text-indigo-700 ring-1 ring-inset ring-indigo-700/10">
-                        🎯 Ritmo IA Actual: <?php echo round($minutos_por_porcentaje, 2); ?> min/%
+                        🎯 Ritmo IA Actual: <?php echo round($factor_correccion, 2); ?> min/%
                     </div>
                 </div>
 
