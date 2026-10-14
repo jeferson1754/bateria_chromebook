@@ -1,9 +1,13 @@
 <?php
 require 'conexion.php';
-
+require 'TuyaAPI.php'; // <-- Agregamos el archivo de la API
 /**
  * Convierte un número de minutos a un formato de "Xh Ymin" o "Ymin".
  */
+
+define('TUYA_CLIENT_ID', '48drsgfdayer75vx5kae');
+define('TUYA_CLIENT_SECRET', '0b3d9cd5f42f4e39a4ab95cd261bd3ee');
+define('TUYA_DEVICE_ID', 'eb6ffaa5e1cef22e3becta');
 function formatMinutesToHoursAndMinutes(int $totalMinutes): string
 {
     if ($totalMinutes < 60) {
@@ -136,72 +140,108 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $tipo_mensaje = 'error';
         } else {
             try {
-                // Evitar duplicados el mismo día
-                $hoy_fecha = date('Y-m-d');
-                $sql_duplicado = "SELECT id FROM registros_bateria WHERE DATE(fecha_registro) = :hoy AND porcentaje_actual = :porcentaje";
-                $stmt_duplicado = $pdo->prepare($sql_duplicado);
-                $stmt_duplicado->execute([':hoy' => $hoy_fecha, ':porcentaje' => $porcentaje_actual]);
 
-                if ($stmt_duplicado->fetch()) {
-                    $mensaje = "Ya registraste una carga hoy iniciando con el " . $porcentaje_actual . "%. Intenta con otro valor.";
+
+                // 1. Instanciamos la API para hacer las comprobaciones previas
+                // Instanciamos la API de Tuya
+                $tuya = new TuyaAPI(TUYA_CLIENT_ID, TUYA_CLIENT_SECRET, 'us');
+
+                // =========================================================================
+                // NUEVA VALIDACIÓN AL APRETAR EL BOTÓN: Detectar Alarmas / Programaciones
+                // =========================================================================
+                $chequeoAlarmas = $tuya->verificarAlarmasActivas(TUYA_DEVICE_ID);
+
+                if ($chequeoAlarmas['tiene_alarma']) {
+                    // Si detecta una programación en el enchufe, bloquea el inicio y avisa
+                    $mensaje = "⚠️ <strong>Alerta de Enchufe:</strong> Se detectó una programación o alarma fija activa en SmartLife. Por seguridad, desactívala en la app antes de iniciar la carga automática para evitar cortes imprevistos.";
                     $tipo_mensaje = 'error';
                 } else {
-                    $porcentaje_objetivo = 80;
-                    $punto_inflexion = 65;
+                    // Evitar duplicados el mismo día
+                    $hoy_fecha = date('Y-m-d');
+                    $sql_duplicado = "SELECT id FROM registros_bateria WHERE DATE(fecha_registro) = :hoy AND porcentaje_actual = :porcentaje";
+                    $stmt_duplicado = $pdo->prepare($sql_duplicado);
+                    $stmt_duplicado->execute([':hoy' => $hoy_fecha, ':porcentaje' => $porcentaje_actual]);
 
-                    // Aplicamos el factor de corrección inteligente calculado desde el historial a los tramos físicos
-                    $tasa_rapida = 1.1 * $factor_correccion;
-                    $tasa_lenta = 1.5 * $factor_correccion;
+                    if ($stmt_duplicado->fetch()) {
+                        $mensaje = "Ya registraste una carga hoy iniciando con el " . $porcentaje_actual . "%. Intenta con otro valor.";
+                        $tipo_mensaje = 'error';
+                    } else {
+                        $porcentaje_objetivo = 80;
+                        $punto_inflexion = 65;
 
-                    $minutos_carga = 0;
-                    $porcentaje_temp = $porcentaje_actual;
+                        // Aplicamos el factor de corrección inteligente calculado desde el historial a los tramos físicos
+                        $tasa_rapida = 1.1 * $factor_correccion;
+                        $tasa_lenta = 1.5 * $factor_correccion;
 
-                    if ($porcentaje_temp < $porcentaje_objetivo) {
-                        // 1. Tramo rápido adaptado
-                        if ($porcentaje_temp < $punto_inflexion) {
-                            $puntos_tramo_1 = min($punto_inflexion, $porcentaje_objetivo) - $porcentaje_temp;
-                            $minutos_carga += $puntos_tramo_1 * $tasa_rapida;
-                            $porcentaje_temp = $punto_inflexion;
-                        }
+                        $minutos_carga = 0;
+                        $porcentaje_temp = $porcentaje_actual;
 
-                        // 2. Tramo lento adaptado
                         if ($porcentaje_temp < $porcentaje_objetivo) {
-                            $puntos_tramo_2 = $porcentaje_objetivo - $porcentaje_temp;
-                            $minutos_carga += $puntos_tramo_2 * $tasa_lenta;
+                            // 1. Tramo rápido adaptado
+                            if ($porcentaje_temp < $punto_inflexion) {
+                                $puntos_tramo_1 = min($punto_inflexion, $porcentaje_objetivo) - $porcentaje_temp;
+                                $minutos_carga += $puntos_tramo_1 * $tasa_rapida;
+                                $porcentaje_temp = $punto_inflexion;
+                            }
+
+                            // 2. Tramo lento adaptado
+                            if ($porcentaje_temp < $porcentaje_objetivo) {
+                                $puntos_tramo_2 = $porcentaje_objetivo - $porcentaje_temp;
+                                $minutos_carga += $puntos_tramo_2 * $tasa_lenta;
+                            }
                         }
-                    }
 
-                    $minutos_carga = (int)round($minutos_carga);
-                    $porcentaje_faltante = max(0, $porcentaje_objetivo - $porcentaje_actual);
+                        $minutos_carga = (int)round($minutos_carga);
+                        $porcentaje_faltante = max(0, $porcentaje_objetivo - $porcentaje_actual);
 
-                    $sql = "INSERT INTO registros_bateria (fecha_registro, porcentaje_actual, porcentaje_faltante, minutos_carga, porcentaje_final_real) 
+
+                        $estado = $tuya->probarConexion(TUYA_DEVICE_ID);
+                        $isOnline = $estado['respuesta_completa']['result']['online'] ?? false;
+
+                        if (!$isOnline) {
+                            // El dispositivo está desconectado
+                            $mensaje = "❌ Error: El enchufe inteligente está offline. No se puede programar el corte de energía.";
+                            // Aquí puedes detener la ejecución o activar una alerta visual en tu web
+                        } else {
+
+                            $sql = "INSERT INTO registros_bateria (fecha_registro, porcentaje_actual, porcentaje_faltante, minutos_carga, porcentaje_final_real) 
                             VALUES (:fecha_registro, :porcentaje_actual, :porcentaje_faltante, :minutos_carga, NULL)";
 
-                    $stmt = $pdo->prepare($sql);
-                    $stmt->execute([
-                        ':fecha_registro' => $fecha_actual_hora_actual,
-                        ':porcentaje_actual' => $porcentaje_actual,
-                        ':porcentaje_faltante' => $porcentaje_faltante,
-                        ':minutos_carga' => $minutos_carga
-                    ]);
+                            $stmt = $pdo->prepare($sql);
+                            $stmt->execute([
+                                ':fecha_registro' => $fecha_actual_hora_actual,
+                                ':porcentaje_actual' => $porcentaje_actual,
+                                ':porcentaje_faltante' => $porcentaje_faltante,
+                                ':minutos_carga' => $minutos_carga
+                            ]);
 
-                    $resultado_calculo = [
-                        'porcentaje_actual' => $porcentaje_actual,
-                        'porcentaje_faltante' => $porcentaje_faltante,
-                        'minutos_carga' => $minutos_carga
-                    ];
+                            $resultado_calculo = [
+                                'porcentaje_actual' => $porcentaje_actual,
+                                'porcentaje_faltante' => $porcentaje_faltante,
+                                'minutos_carga' => $minutos_carga
+                            ];
+                            // Calculamos los segundos totales para la API de Tuya
+                            $segundos_totales = $minutos_carga * 60;
 
-                    $porcentaje_desviacion = round(($factor_correccion - 1) * 100);
-                    $texto_desviacion = $porcentaje_desviacion >= 0 ? "+$porcentaje_desviacion%" : "$porcentaje_desviacion%";
-                    $mensaje = "Nueva carga calculada con curva física adaptada y calibración de historial del $texto_desviacion.";
-                    $tipo_mensaje = 'success';
 
-                    $carga_en_curso = [
-                        'id' => $pdo->lastInsertId(),
-                        'fecha_registro' => $fecha_actual_hora_actual,
-                        'porcentaje_actual' => $porcentaje_actual,
-                        'minutos_carga' => $minutos_carga
-                    ];
+                            // Enviar orden a Tuya (Encender + Countdown)
+                            $respuestaTuya = $tuya->encenderYProgramarApagado(TUYA_DEVICE_ID, $segundos_totales);
+
+
+
+                            $porcentaje_desviacion = round(($factor_correccion - 1) * 100);
+                            $texto_desviacion = $porcentaje_desviacion >= 0 ? "+$porcentaje_desviacion%" : "$porcentaje_desviacion%";
+                            $mensaje = "Nueva carga calculada con curva física adaptada y calibración de historial del $texto_desviacion. 🔌 Enchufe programado.";
+                            $tipo_mensaje = 'success';
+
+                            $carga_en_curso = [
+                                'id' => $pdo->lastInsertId(),
+                                'fecha_registro' => $fecha_actual_hora_actual,
+                                'porcentaje_actual' => $porcentaje_actual,
+                                'minutos_carga' => $minutos_carga
+                            ];
+                        }
+                    }
                 }
             } catch (PDOException $e) {
                 $mensaje = 'Error al procesar el registro: ' . $e->getMessage();
