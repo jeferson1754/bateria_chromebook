@@ -362,3 +362,29 @@ class TuyaAPI
         return ['exito' => false, 'mensaje' => 'No se pudo obtener el estado de la API'];
     }
 }
+
+function enviarAlertaTelegram($mensaje, $tokenBot, $chatId)
+{
+
+    $url = "https://api.telegram.org/bot{$tokenBot}/sendMessage";
+
+    $data = [
+        'chat_id' => $chatId,
+        'text' => $mensaje,
+        'parse_mode' => 'HTML'
+    ];
+
+    $ch = curl_init();
+    curl_setopt($ch, CURLOPT_URL, $url);
+    curl_setopt($ch, CURLOPT_POST, true);
+    curl_setopt($ch, CURLOPT_POSTFIELDS, http_build_query($data));
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+    curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
+    curl_setopt($ch, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_1_1);
+
+    $response = curl_exec($ch);
+    curl_close($ch);
+
+    return $response;
+}

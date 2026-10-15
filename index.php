@@ -5,9 +5,6 @@ require 'TuyaAPI.php'; // <-- Agregamos el archivo de la API
  * Convierte un número de minutos a un formato de "Xh Ymin" o "Ymin".
  */
 
-define('TUYA_CLIENT_ID', '48drsgfdayer75vx5kae');
-define('TUYA_CLIENT_SECRET', '0b3d9cd5f42f4e39a4ab95cd261bd3ee');
-define('TUYA_DEVICE_ID', 'eb6ffaa5e1cef22e3becta');
 function formatMinutesToHoursAndMinutes(int $totalMinutes): string
 {
     if ($totalMinutes < 60) {
@@ -233,6 +230,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             $texto_desviacion = $porcentaje_desviacion >= 0 ? "+$porcentaje_desviacion%" : "$porcentaje_desviacion%";
                             $mensaje = "Nueva carga calculada con curva física adaptada y calibración de historial del $texto_desviacion. 🔌 Enchufe programado.";
                             $tipo_mensaje = 'success';
+
+                            // 1. Calculamos la marca de tiempo (timestamp) exacta en la que ocurrirá el apagado
+                            $timestamp_apagado = time() + $segundos_totales;
+                            $hora_apagado = date('H:i', $timestamp_apagado); // Formato de 24 horas (ej. 17:35)
+
+                            // 2. Armamos el mensaje para Telegram incluyendo la hora de finalización
+                            $mensaje_telegram = "🔌 <b>Carga Iniciada (Chromebook)</b>\n\n" .
+                                "🔋 Porcentaje inicial: <b>{$porcentaje_actual}%</b>\n" .
+                                "🎯 Objetivo: <b>80%</b>\n" .
+                                "⏱️ Tiempo estimado: <b>" . round($segundos_totales / 60) . " min</b>\n" .
+                                "⏰ Hora de apagado: <b>{$hora_apagado} hrs</b>\n" .
+                                "🔌 Estado enchufe: <i>Encendido</i>";
+
+                            enviarAlertaTelegram($mensaje_telegram, $tokenBot, $chatId);
 
                             $carga_en_curso = [
                                 'id' => $pdo->lastInsertId(),
