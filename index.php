@@ -150,116 +150,114 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 // =========================================================================
                 // NUEVA VALIDACIÓN AL APRETAR EL BOTÓN: Detectar Alarmas / Programaciones
                 // =========================================================================
-                $chequeoAlarmas = $tuya->verificarAlarmasActivas(TUYA_DEVICE_ID);
 
-                if ($chequeoAlarmas['tiene_alarma']) {
-                    // Si detecta una programación en el enchufe, bloquea el inicio y avisa
-                    $mensaje = "⚠️ <strong>Alerta de Enchufe:</strong> Se detectó una programación o alarma fija activa en SmartLife. Por seguridad, desactívala en la app antes de iniciar la carga automática para evitar cortes imprevistos.";
+                // Evitar duplicados el mismo día
+                $hoy_fecha = date('Y-m-d');
+                $sql_duplicado = "SELECT id FROM registros_bateria WHERE DATE(fecha_registro) = :hoy AND porcentaje_actual = :porcentaje";
+                $stmt_duplicado = $pdo->prepare($sql_duplicado);
+                $stmt_duplicado->execute([':hoy' => $hoy_fecha, ':porcentaje' => $porcentaje_actual]);
+
+                if ($stmt_duplicado->fetch()) {
+                    $mensaje = "Ya registraste una carga hoy iniciando con el " . $porcentaje_actual . "%. Intenta con otro valor.";
                     $tipo_mensaje = 'error';
                 } else {
-                    // Evitar duplicados el mismo día
-                    $hoy_fecha = date('Y-m-d');
-                    $sql_duplicado = "SELECT id FROM registros_bateria WHERE DATE(fecha_registro) = :hoy AND porcentaje_actual = :porcentaje";
-                    $stmt_duplicado = $pdo->prepare($sql_duplicado);
-                    $stmt_duplicado->execute([':hoy' => $hoy_fecha, ':porcentaje' => $porcentaje_actual]);
+                    $porcentaje_objetivo = 80;
+                    $punto_inflexion = 65;
 
-                    if ($stmt_duplicado->fetch()) {
-                        $mensaje = "Ya registraste una carga hoy iniciando con el " . $porcentaje_actual . "%. Intenta con otro valor.";
-                        $tipo_mensaje = 'error';
-                    } else {
-                        $porcentaje_objetivo = 80;
-                        $punto_inflexion = 65;
+                    // Aplicamos el factor de corrección inteligente calculado desde el historial a los tramos físicos
+                    $tasa_rapida = 1.1 * $factor_correccion;
+                    $tasa_lenta = 1.5 * $factor_correccion;
 
-                        // Aplicamos el factor de corrección inteligente calculado desde el historial a los tramos físicos
-                        $tasa_rapida = 1.1 * $factor_correccion;
-                        $tasa_lenta = 1.5 * $factor_correccion;
+                    $minutos_carga = 0;
+                    $porcentaje_temp = $porcentaje_actual;
 
-                        $minutos_carga = 0;
-                        $porcentaje_temp = $porcentaje_actual;
-
-                        if ($porcentaje_temp < $porcentaje_objetivo) {
-                            // 1. Tramo rápido adaptado
-                            if ($porcentaje_temp < $punto_inflexion) {
-                                $puntos_tramo_1 = min($punto_inflexion, $porcentaje_objetivo) - $porcentaje_temp;
-                                $minutos_carga += $puntos_tramo_1 * $tasa_rapida;
-                                $porcentaje_temp = $punto_inflexion;
-                            }
-
-                            // 2. Tramo lento adaptado
-                            if ($porcentaje_temp < $porcentaje_objetivo) {
-                                $puntos_tramo_2 = $porcentaje_objetivo - $porcentaje_temp;
-                                $minutos_carga += $puntos_tramo_2 * $tasa_lenta;
-                            }
+                    if ($porcentaje_temp < $porcentaje_objetivo) {
+                        // 1. Tramo rápido adaptado
+                        if ($porcentaje_temp < $punto_inflexion) {
+                            $puntos_tramo_1 = min($punto_inflexion, $porcentaje_objetivo) - $porcentaje_temp;
+                            $minutos_carga += $puntos_tramo_1 * $tasa_rapida;
+                            $porcentaje_temp = $punto_inflexion;
                         }
 
-                        $minutos_carga = (int)round($minutos_carga);
-                        $porcentaje_faltante = max(0, $porcentaje_objetivo - $porcentaje_actual);
+                        // 2. Tramo lento adaptado
+                        if ($porcentaje_temp < $porcentaje_objetivo) {
+                            $puntos_tramo_2 = $porcentaje_objetivo - $porcentaje_temp;
+                            $minutos_carga += $puntos_tramo_2 * $tasa_lenta;
+                        }
+                    }
+
+                    $minutos_carga = (int)round($minutos_carga);
+                    $porcentaje_faltante = max(0, $porcentaje_objetivo - $porcentaje_actual);
 
 
-                        $estado = $tuya->probarConexion(TUYA_DEVICE_ID);
-                        $isOnline = $estado['respuesta_completa']['result']['online'] ?? false;
+                    $estado = $tuya->probarConexion(TUYA_DEVICE_ID);
+                    $isOnline = $estado['respuesta_completa']['result']['online'] ?? false;
 
-                        if (!$isOnline) {
-                            // El dispositivo está desconectado
-                            $mensaje = "❌ Error: El enchufe inteligente está offline. No se puede programar el corte de energía.";
-                            // Aquí puedes detener la ejecución o activar una alerta visual en tu web
-                        } else {
+                    if (!$isOnline) {
+                        // El dispositivo está desconectado
+                        $mensaje = "❌ Error: El enchufe inteligente está offline. No se puede programar el corte de energía.";
+                        // Aquí puedes detener la ejecución o activar una alerta visual en tu web
+                    } else {
 
-                            $sql = "INSERT INTO registros_bateria (fecha_registro, porcentaje_actual, porcentaje_faltante, minutos_carga, porcentaje_final_real) 
+                        $sql = "INSERT INTO registros_bateria (fecha_registro, porcentaje_actual, porcentaje_faltante, minutos_carga, porcentaje_final_real) 
                             VALUES (:fecha_registro, :porcentaje_actual, :porcentaje_faltante, :minutos_carga, NULL)";
 
-                            $stmt = $pdo->prepare($sql);
-                            $stmt->execute([
-                                ':fecha_registro' => $fecha_actual_hora_actual,
-                                ':porcentaje_actual' => $porcentaje_actual,
-                                ':porcentaje_faltante' => $porcentaje_faltante,
-                                ':minutos_carga' => $minutos_carga
-                            ]);
+                        $stmt = $pdo->prepare($sql);
+                        $stmt->execute([
+                            ':fecha_registro' => $fecha_actual_hora_actual,
+                            ':porcentaje_actual' => $porcentaje_actual,
+                            ':porcentaje_faltante' => $porcentaje_faltante,
+                            ':minutos_carga' => $minutos_carga
+                        ]);
 
-                            $resultado_calculo = [
-                                'porcentaje_actual' => $porcentaje_actual,
-                                'porcentaje_faltante' => $porcentaje_faltante,
-                                'minutos_carga' => $minutos_carga
-                            ];
-                            // Calculamos los segundos totales para la API de Tuya
-                            $segundos_totales = $minutos_carga * 60;
-
-
-                            // Enviar orden a Tuya (Encender + Countdown)
-                            $respuestaTuya = $tuya->encenderYProgramarApagado(TUYA_DEVICE_ID, $segundos_totales);
+                        $resultado_calculo = [
+                            'porcentaje_actual' => $porcentaje_actual,
+                            'porcentaje_faltante' => $porcentaje_faltante,
+                            'minutos_carga' => $minutos_carga
+                        ];
+                        // Calculamos los segundos totales para la API de Tuya
+                        $segundos_totales = $minutos_carga * 60;
 
 
+                        // Enviar orden a Tuya (Encender + Countdown)
+                        $respuestaTuya = $tuya->encenderYProgramarApagado(TUYA_DEVICE_ID, $segundos_totales);
 
-                            $porcentaje_desviacion = round(($factor_correccion - 1) * 100);
-                            $texto_desviacion = $porcentaje_desviacion >= 0 ? "+$porcentaje_desviacion%" : "$porcentaje_desviacion%";
-                            $mensaje = "Nueva carga calculada con curva física adaptada y calibración de historial del $texto_desviacion. 🔌 Enchufe programado.";
-                            $tipo_mensaje = 'success';
 
-                            // 1. Calculamos la marca de tiempo (timestamp) exacta en la que ocurrirá el apagado
-                            $timestamp_apagado = time() + $segundos_totales;
-                            $hora_apagado = date('H:i', $timestamp_apagado); // Formato de 24 horas (ej. 17:35)
 
-                            $porcentaje_js = $porcentaje_actual;
-                            $minutos_js = round($segundos_totales / 60);
+                        $porcentaje_desviacion = round(($factor_correccion - 1) * 100);
+                        $texto_desviacion = $porcentaje_desviacion >= 0 ? "+$porcentaje_desviacion%" : "$porcentaje_desviacion%";
+                        $mensaje = "Nueva carga calculada con curva física adaptada y calibración de historial del $texto_desviacion. 🔌 Enchufe programado.";
+                        $tipo_mensaje = 'success';
 
-                            // 2. Armamos el mensaje para Telegram incluyendo la hora de finalización
-                            $mensaje_telegram = "🔌 <b>Carga Iniciada (Chromebook)</b>\n\n" .
-                                "🔋 Porcentaje inicial: <b>{$porcentaje_actual}%</b>\n" .
-                                "🎯 Objetivo: <b>80%</b>\n" .
-                                "⏱️ Tiempo estimado: <b>" . round($segundos_totales / 60) . " min</b>\n" .
-                                "⏰ Hora de apagado: <b>{$hora_apagado} hrs</b>\n" .
-                                "📊 Estado: <i>Guardado en Sheets</i>\n" .
-                                "🔌 Estado enchufe: <i>Encendido</i>";
+                        // 1. Calculamos la marca de tiempo (timestamp) exacta en la que ocurrirá el apagado
+                        $timestamp_apagado = time() + $segundos_totales;
+                        $hora_apagado = date('H:i', $timestamp_apagado); // Formato de 24 horas (ej. 17:35)
 
-                            enviarAlertaTelegram($mensaje_telegram, $tokenBot, $chatId);
+                        $porcentaje_js = $porcentaje_actual;
+                        $minutos_js = round($segundos_totales / 60);
 
-                            $carga_en_curso = [
-                                'id' => $pdo->lastInsertId(),
-                                'fecha_registro' => $fecha_actual_hora_actual,
-                                'porcentaje_actual' => $porcentaje_actual,
-                                'minutos_carga' => $minutos_carga
-                            ];
+                        // 2. Armamos el mensaje para Telegram incluyendo la hora de finalización
+                        $mensaje_telegram = "🔌 <b>Carga Iniciada (Chromebook)</b>\n\n" .
+                            "🔋 Porcentaje inicial: <b>{$porcentaje_actual}%</b>\n" .
+                            "🎯 Objetivo: <b>80%</b>\n" .
+                            "⏱️ Tiempo estimado: <b>" . round($segundos_totales / 60) . " min</b>\n" .
+                            "⏰ Hora de apagado: <b>{$hora_apagado} hrs</b>\n" .
+                            "📊 Estado: <i>Guardado en Sheets</i>\n" .
+                            "🔌 Estado enchufe: <i>Encendido</i>";
+
+                        $resultadoTelegram = enviarAlertaTelegram($mensaje_telegram, $tokenBot, $chatId);
+
+                        if (!$resultadoTelegram['success']) {
+                            // Puedes guardar esto en una variable para imprimirlo en un alert o un banner en tu HTML
+                            $error_telegram_web = $resultadoTelegram['error'];
                         }
+
+                        $carga_en_curso = [
+                            'id' => $pdo->lastInsertId(),
+                            'fecha_registro' => $fecha_actual_hora_actual,
+                            'porcentaje_actual' => $porcentaje_actual,
+                            'minutos_carga' => $minutos_carga
+                        ];
                     }
                 }
             } catch (PDOException $e) {
@@ -363,6 +361,12 @@ try {
                 ?>
                 <div class="mb-5 flex items-center gap-2 rounded-lg border p-4 text-sm font-medium <?php echo $alert_classes; ?>">
                     <span><?php echo htmlspecialchars($mensaje); ?></span>
+                </div>
+            <?php endif; ?>
+
+            <?php if (isset($error_telegram_web)): ?>
+                <div class="alert alert-warning" role="alert">
+                    ⚠️ <?php echo htmlspecialchars($error_telegram_web); ?>
                 </div>
             <?php endif; ?>
 
