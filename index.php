@@ -560,29 +560,31 @@ try {
         </div>
     </div>
     <script>
-        // Datos que calculó tu PHP
-        let datosGoogle = {
-            porcentaje: <?php echo $porcentaje_js; ?>,
-            minutos: <?php echo $minutos_js; ?>
-        };
+        <?php if ($isOnline) { ?>
+            // Datos que calculó tu PHP
+            let datosGoogle = {
+                porcentaje: <?php echo $porcentaje_js; ?>,
+                minutos: <?php echo $minutos_js; ?>
+            };
 
-        const urlGoogleScript = "<?php echo $url_google_script; ?>";
+            const urlGoogleScript = "<?php echo $url_google_script; ?>";
 
-        // Hacemos la petición directamente desde el navegador del usuario (salta el bloqueo del hosting)
-        fetch(urlGoogleScript, {
-                method: 'POST',
-                mode: 'no-cors', // Evita problemas de políticas CORS con Google Apps Script
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify(datosGoogle)
-            })
-            .then(() => {
-                console.log('Registro enviado a Google Sheets con éxito desde el navegador.');
-            })
-            .catch((error) => {
-                console.error('Error al conectar con Google Sheets:', error);
-            });
+            // Hacemos la petición directamente desde el navegador del usuario (salta el bloqueo del hosting)
+            fetch(urlGoogleScript, {
+                    method: 'POST',
+                    mode: 'no-cors', // Evita problemas de políticas CORS con Google Apps Script
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(datosGoogle)
+                })
+                .then(() => {
+                    console.log('Registro enviado a Google Sheets con éxito desde el navegador.');
+                })
+                .catch((error) => {
+                    console.error('Error al conectar con Google Sheets:', error);
+                });
+     <?php } ?>
     </script>
 </body>
 
