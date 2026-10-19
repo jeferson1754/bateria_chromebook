@@ -236,22 +236,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         $porcentaje_js = $porcentaje_actual;
                         $minutos_js = round($segundos_totales / 60);
 
-                        // 2. Armamos el mensaje para Telegram incluyendo la hora de finalización
-                        $mensaje_telegram = "🔌 <b>Carga Iniciada (Chromebook)</b>\n\n" .
-                            "🔋 Porcentaje inicial: <b>{$porcentaje_actual}%</b>\n" .
-                            "🎯 Objetivo: <b>80%</b>\n" .
-                            "⏱️ Tiempo estimado: <b>" . round($segundos_totales / 60) . " min</b>\n" .
-                            "⏰ Hora de apagado: <b>{$hora_apagado} hrs</b>\n" .
-                            "📊 Estado: <i>Guardado en Sheets</i>\n" .
-                            "🔌 Estado enchufe: <i>Encendido</i>";
-
-                        $resultadoTelegram = enviarAlertaTelegram($mensaje_telegram, $tokenBot, $chatId);
-
-                        if (!$resultadoTelegram['success']) {
-                            // Puedes guardar esto en una variable para imprimirlo en un alert o un banner en tu HTML
-                            $error_telegram_web = $resultadoTelegram['error'];
-                        }
-
                         $carga_en_curso = [
                             'id' => $pdo->lastInsertId(),
                             'fecha_registro' => $fecha_actual_hora_actual,
